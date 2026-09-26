@@ -1,0 +1,121 @@
+
+Nombre o nickname: Fecha (dd/mm/aaaa): ¡Bienvenido, Alumno!
+Cargando el programa…
+
+EL YONKESITO | Alumno | 24/09/2026
+OPCIÓN   | ACCIÓN
+-------------------------------------------------
+1        | Leer un archivo
+2        | Escribir / modificar un archivo
+3        | Crear un archivo
+4        | Cambiar usuario
+5        | Consultar inventario y alertas
+6        | Registrar refacción
+7        | Registrar entrada
+8        | Registrar salida
+0        | Salir
+Selecciona una opción: Tiempo para seleccionar: 0.0 segundos.
+Archivos disponibles: ['bienvenida.txt', 'despacho.txt', 'recepcion.txt', 'reposicion.txt']
+Nombre exacto del archivo (con .txt): El Yonkesito: control de refacciones. Registra las piezas del taller una por una antes de consultar el catálogo.
+
+
+EL YONKESITO | Alumno | 24/09/2026
+OPCIÓN   | ACCIÓN
+-------------------------------------------------
+1        | Leer un archivo
+2        | Escribir / modificar un archivo
+3        | Crear un archivo
+4        | Cambiar usuario
+5        | Consultar inventario y alertas
+6        | Registrar refacción
+7        | Registrar entrada
+8        | Registrar salida
+0        | Salir
+Selecciona una opción: Tiempo para seleccionar: 0.0 segundos.
+Archivos disponibles: ['bienvenida.txt', 'despacho.txt', 'recepcion.txt', 'reposicion.txt']
+Nombre exacto del archivo (con .txt): Escribe el contenido nuevo (una línea): Archivo guardado con fecha 24/09/2026
+
+EL YONKESITO | Alumno | 24/09/2026
+OPCIÓN   | ACCIÓN
+-------------------------------------------------
+1        | Leer un archivo
+2        | Escribir / modificar un archivo
+3        | Crear un archivo
+4        | Cambiar usuario
+5        | Consultar inventario y alertas
+6        | Registrar refacción
+7        | Registrar entrada
+8        | Registrar salida
+0        | Salir
+Selecciona una opción: Tiempo para seleccionar: 0.0 segundos.
+Archivos disponibles: ['bienvenida.txt', 'despacho.txt', 'evidencia.txt', 'recepcion.txt', 'reposicion.txt']
+Nombre exacto del archivo (con .txt): Contenido actual:
+Fecha: 24/09/2026 | Usuario: Alumno
+
+Registro de prueba
+
+Escribe el contenido nuevo (una línea): Archivo guardado con fecha 24/09/2026
+
+EL YONKESITO | Alumno | 24/09/2026
+OPCIÓN   | ACCIÓN
+-------------------------------------------------
+1        | Leer un archivo
+2        | Escribir / modificar un archivo
+3        | Crear un archivo
+4        | Cambiar usuario
+5        | Consultar inventario y alertas
+6        | Registrar refacción
+7        | Registrar entrada
+8        | Registrar salida
+0        | Salir
+Selecciona una opción: Tiempo para seleccionar: 0.0 segundos.
+Archivos disponibles: ['bienvenida.txt', 'despacho.txt', 'evidencia.txt', 'recepcion.txt', 'reposicion.txt']
+Nombre exacto del archivo (con .txt): No se pudo completar la operación: [Errno 2] No such file or directory: '/tmp/tmp5j014jps/documentos/ausente.txt'
+
+EL YONKESITO | Alumno | 24/09/2026
+OPCIÓN   | ACCIÓN
+-------------------------------------------------
+1        | Leer un archivo
+2        | Escribir / modificar un archivo
+3        | Crear un archivo
+4        | Cambiar usuario
+5        | Consultar inventario y alertas
+6        | Registrar refacción
+7        | Registrar entrada
+8        | Registrar salida
+0        | Salir
+Selecciona una opción: Tiempo para seleccionar: 0.0 segundos.
+
+Nombre o nickname: Fecha (dd/mm/aaaa): ¡Bienvenido, Segundo usuario!
+Cargando el programa…
+
+EL YONKESITO | Segundo usuario | 25/09/2026
+OPCIÓN   | ACCIÓN
+-------------------------------------------------
+1        | Leer un archivo
+2        | Escribir / modificar un archivo
+3        | Crear un archivo
+4        | Cambiar usuario
+5        | Consultar inventario y alertas
+6        | Registrar refacción
+7        | Registrar entrada
+8        | Registrar salida
+0        | Salir
+Selecciona una opción: Tiempo para seleccionar: 0.0 segundos.
+
+CÓDIGO        PIEZA                              STOCK   MÍNIMO   ALERTA / PRECIO MXN
+
+EL YONKESITO | Segundo usuario | 25/09/2026
+OPCIÓN   | ACCIÓN
+-------------------------------------------------
+1        | Leer un archivo
+2        | Escribir / modificar un archivo
+3        | Crear un archivo
+4        | Cambiar usuario
+5        | Consultar inventario y alertas
+6        | Registrar refacción
+7        | Registrar entrada
+8        | Registrar salida
+0        | Salir
+Selecciona una opción: Tiempo para seleccionar: 0.0 segundos.
+Hasta pronto, Segundo usuario.

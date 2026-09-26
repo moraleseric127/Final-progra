@@ -1,0 +1,859 @@
+<!doctype html><html lang="es"><meta charset="utf-8"><title>El Yonkesito - Código anexo</title><style>body{font:16px Arial;color:#17323e;margin:40px}h1{font-size:28px}h2{break-before:page}pre{font:10px/1.45 monospace;white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid #ccd5db;padding:18px}@media print{@page{margin:16mm}body{margin:0}}</style><h1>El Yonkesito - Código Python completo</h1><p>25/09/2026. Fuentes funcionales y pruebas. Usar Imprimir para exportar este anexo a PDF.</p>
+<h2>app.py</h2>
+<pre>&quot;&quot;&quot;Web Python: catálogo público y acceso del taller con contraseña propia.&quot;&quot;&quot;
+from datetime import datetime  # Proporciona fecha inicial del catálogo anónimo.
+from pathlib import Path  # Resuelve archivos desde el proyecto, no desde Temp.
+import hmac  # Compara tokens CSRF sin filtraciones por comparación temprana.
+import os  # Separa configuración local y de alojamiento.
+import sqlite3  # Identifica errores de almacenamiento para manejarlos.
+from flask import Flask, request, jsonify, send_from_directory  # HTTP y servidor WSGI compatible con Gunicorn.
+from werkzeug.exceptions import HTTPException  # Conserva códigos HTTP como 404 o 413.
+from werkzeug.middleware.proxy_fix import ProxyFix  # Solo se activa detrás de un proxy de confianza.
+import core  # Reutiliza reglas de inventario y documentos con la consola.
+import seguridad  # Verifica contraseña y sesiones persistentes.
+
+
+def create_app(test_config=None):  # Factoría que permite probar sin usar el inventario real.
+    core.initialize()  # Empieza sin piezas y prepara cuatro documentos.
+    seguridad.initialize()  # Crea tablas de sesiones y límite de intentos.
+    app = Flask(__name__, static_folder=None)  # Solo se sirven recursos de la lista autorizada.
+    app.config.update(MAX_CONTENT_LENGTH=100000, PASSWORD_HASH=seguridad.load_hash() if test_config is None else &#x27;&#x27;, SECURE_COOKIE=os.getenv(&#x27;YONKESITO_SECURE_COOKIE&#x27;) == &#x27;1&#x27;)  # Límite y secretos del servidor.
+    if test_config:  # Solo las pruebas inyectan configuración aislada.
+        app.config.update(test_config)  # No existe una ruta HTTP para cambiar esta configuración.
+    if os.getenv(&#x27;YONKESITO_TRUST_PROXY&#x27;) == &#x27;1&#x27;:  # Usar únicamente tras un proxy controlado del proveedor.
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=0)  # Una capa de proxy, según la guía de despliegue.
+    static = Path(__file__).parent / &#x27;static&#x27;  # Funciona con directorios de ejecución distintos.
+
+    def current_session():  # Obtiene identidad y permisos únicamente desde el servidor.
+        return seguridad.get_session(request.cookies.get(&#x27;session&#x27;, &#x27;&#x27;), app.config[&#x27;PASSWORD_HASH&#x27;])  # Una cookie inventada no permite editar.
+
+    def public_session(value):  # Omite huellas de contraseña y datos internos.
+        if not value:  # Cliente anónimo: no se pide contraseña ni cuenta de ChatGPT.
+            now = datetime.now()  # Fecha de consulta, no de modificación.
+            return {&#x27;name&#x27;: &#x27;Cliente&#x27;, &#x27;role&#x27;: &#x27;client&#x27;, &#x27;date&#x27;: (now.day, now.month, now.year), &#x27;csrf&#x27;: &#x27;&#x27;}  # Solo lectura.
+        return {key: value[key] for key in (&#x27;name&#x27;, &#x27;role&#x27;, &#x27;date&#x27;, &#x27;csrf&#x27;)}  # La fecha es tupla dentro de Python.
+
+    @app.after_request  # Añade protección tanto a pantallas como a errores.
+    def protect(response):  # Centraliza encabezados.
+        response.headers[&#x27;Cache-Control&#x27;] = &#x27;no-store&#x27;  # Evita datos internos en cachés compartidas.
+        response.headers[&#x27;X-Content-Type-Options&#x27;] = &#x27;nosniff&#x27;  # Respeta tipos declarados.
+        response.headers[&#x27;Content-Security-Policy&#x27;] = &quot;default-src &#x27;self&#x27;; style-src &#x27;self&#x27;; script-src &#x27;self&#x27;; img-src &#x27;self&#x27;; frame-ancestors &#x27;none&#x27;; base-uri &#x27;self&#x27;; form-action &#x27;self&#x27;&quot;  # Solo recursos propios.
+        if app.config[&#x27;SECURE_COOKIE&#x27;]:  # HTTPS obligatorio en el alojamiento.
+            response.headers[&#x27;Strict-Transport-Security&#x27;] = &#x27;max-age=31536000&#x27;  # Recuerda el uso de HTTPS.
+        return response  # No altera el resultado de negocio.
+
+    @app.get(&#x27;/&#x27;)  # Catálogo directamente accesible por los clientes.
+    @app.get(&#x27;/taller&#x27;)  # Misma interfaz con formulario de contraseña inicial.
+    def page():  # Las operaciones privadas siguen comprobando la sesión en API.
+        return send_from_directory(static, &#x27;index.html&#x27;)  # No acepta rutas de archivos arbitrarias.
+
+    @app.get(&#x27;/&lt;name&gt;&#x27;)  # Sirve exclusivamente estilos, interacción y favicon.
+    def asset(name):  # No se expone datos/, código Python ni configuración.
+        if name not in (&#x27;style.css&#x27;, &#x27;main.js&#x27;, &#x27;favicon.svg&#x27;):  # Lista explícita de archivos públicos.
+            return jsonify(error=&#x27;No se encontró la página.&#x27;), 404  # No permite recorrer carpetas.
+        return send_from_directory(static, name)  # MIME determinado por Flask.
+
+    @app.get(&#x27;/health&#x27;)  # Comprobación del alojamiento sin datos privados.
+    def health():  # Verifica que la base puede leerse.
+        with core.connection() as db:  # Cierra conexión al terminar.
+            db.execute(&#x27;SELECT 1&#x27;).fetchone()  # Consulta sin cambios.
+        return jsonify(ok=True)  # No enumera piezas ni secretos.
+
+    @app.get(&#x27;/api/&lt;action&gt;&#x27;)  # Endpoints públicos y privados comparten controles claros.
+    def read(action):  # Consultas sin mutaciones.
+        value = current_session()  # Verifica expiración y contraseña vigente.
+        if action == &#x27;session&#x27;:  # La web restaura su vista al recargar.
+            return jsonify(session=public_session(value))  # Nunca devuelve una contraseña.
+        if action == &#x27;inventory&#x27;:  # Única información de negocio pública.
+            items = core.inventory()  # Lista de diccionarios persistidos.
+            if not value:  # Omite agotadas y mínimos internos para clientes.
+                items = [{k: v for k, v in p.items() if k != &#x27;minimum&#x27;} for p in items if p[&#x27;quantity&#x27;] &gt; 0]  # Filtro también en servidor.
+            return jsonify(items=items)  # Precios en centavos enteros.
+        if not value:  # Autenticación obligatoria para documentos e historial.
+            return jsonify(error=&#x27;Acceso exclusivo del personal del taller.&#x27;), 401  # Ocultar botones no es la protección principal.
+        if action == &#x27;history&#x27;:  # Solo personal con contraseña válida.
+            return jsonify(items=core.history())  # Máximo 200 en pantalla.
+        return jsonify(error=&#x27;No existe esa consulta.&#x27;), 404  # Mensaje controlado.
+
+    @app.post(&#x27;/api/&lt;action&gt;&#x27;)  # Toda modificación pasa por autenticación y CSRF.
+    def write(action):  # No admite métodos GET para modificar inventario.
+        origin = request.headers.get(&#x27;Origin&#x27;)  # Rechaza formularios enviados desde otras páginas.
+        if origin != request.host_url.rstrip(&#x27;/&#x27;) or not request.is_json:  # Acepta solo el origen propio y JSON.
+            return jsonify(error=&#x27;Solicitud inválida. Recarga la página.&#x27;), 403  # Compatible con HTTPS tras proxy configurado.
+        data = request.get_json()  # Flask aplica también el tamaño máximo configurado.
+        if not isinstance(data, dict):  # Rechaza listas o valores sin campos.
+            raise ValueError(&#x27;La solicitud debe ser un objeto.&#x27;)  # Manejador común de errores.
+        if action == &#x27;login&#x27;:  # La contraseña es la única forma de conceder el rol staff.
+            ip = request.remote_addr or &#x27;unknown&#x27;  # No confía directamente en encabezados de clientes.
+            if not seguridad.reserve_attempt(ip):  # El límite es persistente y atómico.
+                return jsonify(error=&#x27;Demasiados intentos. Espera 15 minutos para volver a ingresar.&#x27;), 429  # No bloquea el catálogo.
+            if not seguridad.verify_password(data.get(&#x27;password&#x27;, &#x27;&#x27;), app.config[&#x27;PASSWORD_HASH&#x27;]):  # Verificación del lado servidor.
+                return jsonify(error=&#x27;La contraseña del taller es incorrecta.&#x27;), 403  # No crea sesión.
+            name = core.text(data.get(&#x27;name&#x27;, &#x27;&#x27;), &#x27;Nombre&#x27;, 40)  # Nombre o nickname de la rúbrica.
+            date = core.date_tuple(data.get(&#x27;date&#x27;, &#x27;&#x27;))  # Tupla día, mes, año validada.
+            seguridad.revoke(request.cookies.get(&#x27;session&#x27;, &#x27;&#x27;))  # Reemplaza cualquier sesión anterior de ese navegador.
+            token, value = seguridad.new_session(name, date, app.config[&#x27;PASSWORD_HASH&#x27;])  # Rol fijo staff.
+            seguridad.clear_attempts(ip)  # Reinicia el contador después del ingreso correcto.
+            response = jsonify(session=public_session(value), welcome=&#x27;¡Bienvenido, &#x27; + name + &#x27;!&#x27;)  # Operador string +.
+            response.set_cookie(&#x27;session&#x27;, token, max_age=28800, httponly=True, secure=app.config[&#x27;SECURE_COOKIE&#x27;], samesite=&#x27;Strict&#x27;)  # JS no puede leer la cookie.
+            return response  # La carga visual se presenta antes de abrir el panel.
+        value = current_session()  # Nunca usa el rol recibido en JSON.
+        if not value:  # Todas las demás escrituras son exclusivas del taller.
+            return jsonify(error=&#x27;Inicia sesión en Acceso del taller.&#x27;), 401  # Un cliente anónimo no puede editar.
+        if not hmac.compare_digest(request.headers.get(&#x27;X-CSRF-Token&#x27;, &#x27;&#x27;), value[&#x27;csrf&#x27;]):  # Impide reutilizar formularios ajenos.
+            return jsonify(error=&#x27;Solicitud inválida. Recarga la página.&#x27;), 403  # Conserva el inventario.
+        if action == &#x27;logout&#x27;:  # Cambiar usuario cierra el acceso anterior.
+            seguridad.revoke(request.cookies.get(&#x27;session&#x27;, &#x27;&#x27;))  # Invalida el token en SQLite.
+            response = jsonify(ok=True)  # Devuelve al formulario para cambiar usuario.
+            response.delete_cookie(&#x27;session&#x27;, secure=app.config[&#x27;SECURE_COOKIE&#x27;], httponly=True, samesite=&#x27;Strict&#x27;)  # Limpia navegador.
+            return response  # La cookie anterior ya no sirve.
+        if action == &#x27;parts&#x27;:  # Alta individual con precio obligatorio.
+            core.add_part(data, value[&#x27;date&#x27;], value[&#x27;name&#x27;])  # Comparte validaciones con consola.
+        elif action == &#x27;price&#x27;:  # Actualización de precio por pieza.
+            core.set_price(data)  # Centavos enteros y límite validado.
+        elif action == &#x27;move&#x27;:  # Entradas y salidas con bitácora.
+            core.move(data, value[&#x27;date&#x27;], value[&#x27;name&#x27;])  # Transacción evita existencias negativas.
+        elif action == &#x27;retire&#x27;:
+            core.retire_part(data, value[&#x27;date&#x27;], value[&#x27;name&#x27;])
+        else:  # Un nombre de operación desconocido no escribe nada.
+            return jsonify(error=&#x27;No existe esa operación.&#x27;), 404  # Error corregible.
+        return jsonify(ok=True)  # Confirma solo tras persistir los cambios.
+
+    @app.errorhandler(Exception)  # Maneja excepciones sin exponer trazas al cliente.
+    def failure(error):  # La aplicación puede continuar después de un dato inválido.
+        if isinstance(error, FileNotFoundError):  # Nombre mal escrito o ausente.
+            return jsonify(error=&#x27;No existe ese archivo. Revisa el nombre.&#x27;), 404  # Permite intentar otro nombre.
+        if isinstance(error, FileExistsError):  # Crear no sobreescribe un documento.
+            return jsonify(error=&#x27;Ya existe ese archivo. Elige Modificar.&#x27;), 409  # Conserva el anterior.
+        if isinstance(error, ValueError):  # Fechas, cantidades y nombres inválidos.
+            return jsonify(error=str(error)), 400  # Muestra el campo a corregir.
+        if isinstance(error, HTTPException):  # JSON inválido, tamaño excesivo o ruta incorrecta.
+            return jsonify(error=&#x27;Solicitud no válida.&#x27;), error.code  # Conserva el código HTTP apropiado.
+        app.logger.error(&#x27;Fallo interno&#x27;, exc_info=error)  # Depuración del lado del servidor.
+        return jsonify(error=&#x27;No se pudo completar la operación. Revisa el servidor.&#x27;), 503  # No entrega rutas ni SQL.
+    return app  # WSGI para local, pruebas o Gunicorn.
+
+
+if __name__ == &#x27;__main__&#x27;:  # Ejecutar desde PyCharm inicia la aplicación local.
+    try:  # Explica la configuración pendiente en vez de mostrar una traza.
+        application = create_app()  # La contraseña debe configurarse previamente.
+        port = int(os.getenv(&#x27;YONKESITO_PORT&#x27;, &#x27;8000&#x27;))  # Permite resolver un puerto ocupado.
+        print(f&#x27;Abre http://127.0.0.1:{port} en tu navegador.&#x27;)  # Dirección local explícita.
+        application.run(host=&#x27;127.0.0.1&#x27;, port=port, debug=False)  # Internet usa Gunicorn, no este servidor local.
+    except (RuntimeError, ValueError, OSError) as error:  # Errores habituales de configuración.
+        print(&#x27;No se pudo iniciar:&#x27;, error)  # Instrucción para corregir antes de reintentar.
+</pre>
+<h2>core.py</h2>
+<pre>&quot;&quot;&quot;Reglas compartidas por la web y la consola de El Yonkesito.&quot;&quot;&quot;
+from contextlib import contextmanager  # Cierra conexiones tras confirmar o revertir.
+from datetime import datetime  # Valida fechas reales, incluidos años bisiestos.
+from pathlib import Path  # Construye rutas compatibles con Windows y otros sistemas.
+import os  # Lee configuración opcional sin editar el programa.
+import re  # Comprueba formatos de códigos, fechas y nombres de archivo.
+import sqlite3  # Persiste el inventario con transacciones incluidas en Python.
+import threading  # Coordina las escrituras de documentos entre solicitudes.
+
+# La carpeta se puede cambiar para ejecutar pruebas sin tocar los datos reales.
+ROOT = Path(os.environ.get(&#x27;YONKESITO_DATA&#x27;, Path(__file__).parent / &#x27;datos&#x27;))
+DOCS = ROOT / &#x27;documentos&#x27;
+LOCK = threading.RLock()  # Impide escrituras simultáneas dentro de este proceso.
+STATES = (&#x27;Usada&#x27;, &#x27;Nueva&#x27;, &#x27;Reacondicionada&#x27;)  # Condiciones admitidas por el catálogo.
+
+@contextmanager  # Garantiza el cierre de SQLite en todas las operaciones.
+def connection():  # Centraliza la apertura de la base de datos.
+    # sqlite3 abre transacciones para que una salida no deje stock negativo.
+    db = sqlite3.connect(ROOT / &#x27;inventario.sqlite3&#x27;, timeout=10)
+    db.row_factory = sqlite3.Row  # Las filas se convierten fácilmente a diccionarios.
+    try:  # El bloque with de SQLite confirma o revierte automáticamente.
+        with db:  # Agrupa las operaciones de quien utiliza esta conexión.
+            yield db  # Entrega temporalmente la conexión al modelo.
+    finally:  # También se ejecuta ante errores de validación o escritura.
+        db.close()  # Libera el descriptor sin depender del recolector de basura.
+
+
+def initialize():  # Prepara almacenamiento, tablas y documentos de la primera ejecución.
+    # Nunca se reemplazan registros que el usuario ya haya capturado.
+    DOCS.mkdir(parents=True, exist_ok=True)  # Permite reiniciar sin fallar si ya existe la carpeta.
+    with connection() as db:  # Confirma la transacción al terminar o revierte ante un error.
+        db.execute(&#x27;CREATE TABLE IF NOT EXISTS parts (code TEXT PRIMARY KEY, name TEXT, category TEXT, vehicle TEXT, condition TEXT, quantity INTEGER CHECK(quantity&gt;=0), minimum INTEGER CHECK(minimum&gt;=0))&#x27;)  # Los CHECK protegen las cantidades incluso fuera de la interfaz.
+        db.execute(&#x27;CREATE TABLE IF NOT EXISTS movements (id INTEGER PRIMARY KEY, code TEXT, kind TEXT, amount INTEGER, date TEXT, user TEXT, note TEXT)&#x27;)  # Registra una bitácora separada del saldo actual.
+        db.execute(&#x27;CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)&#x27;)  # Guarda la marca de inicialización del catálogo.
+        # Las instalaciones nuevas empiezan vacías; bases existentes conservan sus piezas.
+        columns = {row[&#x27;name&#x27;] for row in db.execute(&#x27;PRAGMA table_info(parts)&#x27;)}
+        if &#x27;active&#x27; not in columns:
+            db.execute(&#x27;ALTER TABLE parts ADD COLUMN active INTEGER NOT NULL DEFAULT 1&#x27;)
+        if &#x27;price_cents&#x27; not in columns:
+            db.execute(&#x27;ALTER TABLE parts ADD COLUMN price_cents INTEGER CHECK(price_cents&gt;=0)&#x27;)
+    # Estos cuatro archivos están disponibles antes de iniciar la sesión.
+    initial = {  # Diccionario de cuatro archivos de lectura preexistentes.
+        &#x27;bienvenida.txt&#x27;: &#x27;El Yonkesito: control de refacciones. Registra las piezas del taller una por una antes de consultar el catálogo.&#x27;,
+        &#x27;recepcion.txt&#x27;: &#x27;Recepción: verificar código, aplicación, condición y cantidad antes de registrar una entrada.&#x27;,
+        &#x27;despacho.txt&#x27;: &#x27;Despacho: verificar compatibilidad y registrar una salida; no entregar más unidades que las disponibles.&#x27;,
+        &#x27;reposicion.txt&#x27;: &#x27;Reposición: revisar las piezas cuya cantidad sea menor o igual al stock mínimo.&#x27;,
+    }
+    for name, content in initial.items():  # Recorre nombres y textos de los documentos de ejemplo.
+        path = DOCS / name  # Las claves son nombres internos y seguros.
+        if not path.exists():  # Comprueba la existencia antes de operar sobre el archivo.
+            path.write_text(content + &#x27;\n&#x27;, encoding=&#x27;utf-8&#x27;)  # Guarda texto Unicode para conservar acentos.
+
+
+def date_tuple(value):  # Convierte una fecha capturada en la tupla de la rúbrica.
+    # La expresión exige el formato de la rúbrica; datetime valida el calendario.
+    if not re.fullmatch(r&#x27;\d{2}/\d{2}/\d{4}&#x27;, str(value)):  # Rechaza fechas que no tengan dos dígitos para día y mes.
+        raise ValueError(&#x27;Escribe la fecha como dd/mm/aaaa.&#x27;)  # La interfaz mostrará el formato correcto al usuario.
+    date = datetime.strptime(value, &#x27;%d/%m/%Y&#x27;)  # Rechaza fechas imposibles, como el 31 de febrero.
+    return (date.day, date.month, date.year)  # Tupla: día, mes, año.
+
+
+def date_text(date):  # Da formato legible a la tupla almacenada.
+    # Se conserva la fecha capturada, sin sustituirla por la del sistema.
+    return &#x27;%02d/%02d/%04d&#x27; % tuple(date)  # Conserva ceros iniciales de día y mes.
+
+
+def text(value, label, limit=120):  # Valida campos de texto compartidos por las dos interfaces.
+    # Los límites evitan entradas vacías o desmesuradas desde ambas interfaces.
+    value = str(value).strip()  # Normaliza espacios antes de validar longitud.
+    if not value or len(value) &gt; limit:  # Exige contenido y establece un tamaño máximo.
+        raise ValueError(f&#x27;{label}: escribe entre 1 y {limit} caracteres.&#x27;)  # Identifica el campo que necesita corrección.
+    return value  # Devuelve únicamente el texto validado.
+
+
+def integer(value, label, lower=0):  # Acepta cantidades enteras dentro de los límites operativos.
+    # No se truncan decimales: 1.5 y los negativos son entradas inválidas.
+    if not re.fullmatch(r&#x27;\d{1,7}&#x27;, str(value)) or int(value) &lt; lower:  # Descarta fracciones, signos y cantidades excesivas.
+        raise ValueError(f&#x27;{label}: usa un entero entre {lower} y 9999999.&#x27;)  # Explica el intervalo permitido para este campo.
+    return int(value)  # Convierte a entero solo después de validar el formato.
+
+
+def price_cents(value):
+    # Guarda centavos enteros para no introducir errores de redondeo monetario.
+    value = str(value).strip()
+    if not re.fullmatch(r&#x27;\d{1,7}(?:\.\d{1,2})?&#x27;, value):
+        raise ValueError(&#x27;Precio: usa un importe no negativo con máximo dos decimales (ej. 250.50).&#x27;)
+    whole, _, fraction = value.partition(&#x27;.&#x27;)
+    return int(whole) * 100 + int(fraction.ljust(2, &#x27;0&#x27;))
+
+
+def set_price(data):
+    # Permite al taller corregir el precio, también en piezas de versiones anteriores.
+    code = text(data.get(&#x27;code&#x27;, &#x27;&#x27;), &#x27;Código&#x27;, 24).upper()
+    cents = price_cents(data.get(&#x27;price&#x27;, &#x27;&#x27;))
+    with connection() as db:
+        if db.execute(&#x27;UPDATE parts SET price_cents=? WHERE code=? AND active=1&#x27;, (cents, code)).rowcount != 1:
+            raise ValueError(&#x27;No se encontró el código de refacción.&#x27;)
+
+
+def inventory():  # Obtiene la vista actual del inventario.
+    # Se entrega una lista de diccionarios, compartida por web y consola.
+    with connection() as db:  # Confirma la transacción al terminar o revierte ante un error.
+        return [dict(row) for row in db.execute(&#x27;SELECT * FROM parts WHERE active=1 ORDER BY name&#x27;)]  # Orden alfabético para facilitar la búsqueda visual.
+
+
+def history():  # Obtiene los movimientos más recientes.
+    # El historial deja evidencia de quién hizo cada entrada o salida.
+    with connection() as db:  # Confirma la transacción al terminar o revierte ante un error.
+        return [dict(row) for row in db.execute(&#x27;SELECT * FROM movements ORDER BY id DESC LIMIT 200&#x27;)]  # Limita la consulta a 200 registros para la vista.
+
+
+def add_part(data, date, user):  # Da de alta una pieza y deja evidencia de su creación.
+    # El código normalizado permite detectar duplicados sin distinguir mayúsculas.
+    code = text(data.get(&#x27;code&#x27;, &#x27;&#x27;), &#x27;Código&#x27;, 24).upper()  # Valida y normaliza el identificador capturado.
+    if not re.fullmatch(r&#x27;[A-Z0-9-]+&#x27;, code):  # Excluye símbolos no admitidos en los códigos.
+        raise ValueError(&#x27;Código: usa letras sin acentos, números y guiones.&#x27;)  # Explica cómo corregir un identificador inválido.
+    name = text(data.get(&#x27;name&#x27;, &#x27;&#x27;), &#x27;Nombre&#x27;)  # Exige un nombre legible de la refacción.
+    category = text(data.get(&#x27;category&#x27;, &#x27;&#x27;), &#x27;Categoría&#x27;, 40)  # Agrupa piezas para los filtros del catálogo.
+    vehicle = text(data.get(&#x27;vehicle&#x27;, &#x27;&#x27;), &#x27;Aplicación&#x27;)  # Registra la aplicación indicada por el personal.
+    condition = data.get(&#x27;condition&#x27;, &#x27;&#x27;)  # Recupera la condición seleccionada de la pieza.
+    if condition not in STATES:  # Impide condiciones fuera del catálogo autorizado.
+        raise ValueError(&#x27;Selecciona una condición válida.&#x27;)  # Mantiene la validación también en el servidor.
+    quantity = integer(data.get(&#x27;quantity&#x27;, &#x27;&#x27;), &#x27;Cantidad&#x27;)  # No permite una existencia inicial negativa.
+    cents = price_cents(data.get(&#x27;price&#x27;, &#x27;&#x27;))  # Precio unitario obligatorio en MXN.
+    minimum = integer(data.get(&#x27;minimum&#x27;, &#x27;&#x27;), &#x27;Stock mínimo&#x27;)  # Valida el umbral que activará la alerta.
+    with connection() as db:  # Confirma la transacción al terminar o revierte ante un error.
+        try:
+            # Inventario e historial se guardan en una misma transacción.
+            db.execute(&#x27;INSERT INTO parts(code,name,category,vehicle,condition,quantity,minimum,price_cents) VALUES (?,?,?,?,?,?,?,?)&#x27;, (code, name, category, vehicle, condition, quantity, minimum, cents))  # Los parámetros SQL separan datos de instrucciones.
+            db.execute(&#x27;INSERT INTO movements(code,kind,amount,date,user,note) VALUES (?,?,?,?,?,?)&#x27;, (code, &#x27;Alta&#x27;, quantity, date_text(date), user, &#x27;Registro inicial&#x27;))
+        except sqlite3.IntegrityError as error:  # Transforma el conflicto del código en un mensaje entendible.
+            raise ValueError(&#x27;Ya existe una refacción con ese código.&#x27;) from error  # Conserva el registro previo ante códigos repetidos.
+    return code  # Devuelve el identificador del alta confirmada.
+
+
+def move(data, date, user):  # Procesa entradas y salidas sin inconsistencias de stock.
+    # Solo se aceptan movimientos explícitos y cantidades positivas.
+    code = text(data.get(&#x27;code&#x27;, &#x27;&#x27;), &#x27;Código&#x27;, 24).upper()  # Valida y normaliza el identificador capturado.
+    kind = data.get(&#x27;kind&#x27;)  # Distingue recepción de piezas y despacho.
+    if kind not in (&#x27;Entrada&#x27;, &#x27;Salida&#x27;):  # Evita movimientos de tipo desconocido.
+        raise ValueError(&#x27;Selecciona Entrada o Salida.&#x27;)  # Se solicita corregir el tipo antes de modificar saldos.
+    amount = integer(data.get(&#x27;amount&#x27;, &#x27;&#x27;), &#x27;Cantidad&#x27;, 1)  # Exige al menos una unidad por movimiento.
+    note = text(data.get(&#x27;note&#x27;, &#x27;&#x27;), &#x27;Motivo&#x27;, 240)  # El motivo ayuda a revisar la bitácora.
+    with connection() as db:  # Confirma la transacción al terminar o revierte ante un error.
+        db.execute(&#x27;BEGIN IMMEDIATE&#x27;)  # Evita despachos simultáneos sobre el mismo saldo.
+        row = db.execute(&#x27;SELECT quantity FROM parts WHERE code=? AND active=1&#x27;, (code,)).fetchone()  # Consulta el saldo dentro de la transacción bloqueada.
+        if row is None:  # Un código inexistente no puede recibir movimientos.
+            raise ValueError(&#x27;No se encontró el código de refacción.&#x27;)  # Permite volver a capturar un código correcto.
+        quantity = row[&#x27;quantity&#x27;]  # Usa el saldo actual, no el enviado por el navegador.
+        if kind == &#x27;Salida&#x27;:  # Aplica validaciones adicionales al despacho.
+            if amount &gt; quantity:  # Comprueba suficiencia antes de restar.
+                raise ValueError(&#x27;La salida supera las existencias disponibles.&#x27;)  # Rechaza toda la transacción sin alterar el inventario.
+            quantity -= amount  # Operador de asignación solicitado en la propuesta.
+        else:
+            quantity += amount  # Las entradas aumentan el inventario.
+        if quantity &gt; 9999999:  # Mantiene el mismo límite que las altas.
+            raise ValueError(&#x27;El inventario excede el límite permitido.&#x27;)  # Solicita corregir la entrada demasiado grande.
+        db.execute(&#x27;UPDATE parts SET quantity=? WHERE code=?&#x27;, (quantity, code))  # Actualiza exclusivamente la refacción seleccionada.
+        db.execute(&#x27;INSERT INTO movements(code,kind,amount,date,user,note) VALUES (?,?,?,?,?,?)&#x27;, (code, kind, amount, date_text(date), user, note))
+    return quantity  # Informa el saldo después de confirmar el movimiento.
+
+
+def document_path(name):  # Restringe la lectura y escritura a documentos del taller.
+    # No se admiten rutas ni extensiones distintas de .txt.
+    if not re.fullmatch(r&#x27;[A-Za-z0-9_-]{1,60}\.txt&#x27;, str(name)):  # Bloquea rutas relativas, separadores y extensiones ajenas.
+        raise ValueError(&#x27;Nombre inválido. Ejemplo: inventario_septiembre.txt (sin espacios).&#x27;)  # Da un ejemplo válido sin revelar rutas internas.
+    return DOCS / name  # Compone una ruta dentro de la carpeta autorizada.
+
+
+def documents():  # Expone los nombres que el usuario puede seleccionar.
+    # La lista se muestra antes de pedir el nombre exacto del archivo.
+    return sorted(path.name for path in DOCS.glob(&#x27;*.txt&#x27;) if path.is_file())  # Ordena solo archivos de texto existentes.
+
+
+def read_document(name):  # Lee el contenido completo de un documento permitido.
+    # FileNotFoundError se maneja en la interfaz sin terminar el programa.
+    return document_path(name).read_text(encoding=&#x27;utf-8&#x27;)  # Los errores de lectura llegan al manejador de la interfaz.
+
+
+def write_document(name, content, date, user, create=False):  # Distingue creación exclusiva de modificación de un archivo existente.
+    path = document_path(name)  # Valida el nombre antes de cualquier escritura.
+    content = text(content, &#x27;Contenido&#x27;, 20000)  # Impide guardar textos vacíos o excesivos.
+    content = re.sub(r&#x27;\AFecha: \d{2}/\d{2}/\d{4} \| Usuario: [^\n]*\n\n&#x27;, &#x27;&#x27;, content, count=1)  # Renueva la cabecera anterior.
+    # La cabecera registra la tupla de fecha y la persona que hizo el cambio.
+    result = f&#x27;Fecha: {date_text(date)} | Usuario: {user}\n\n{content}\n&#x27;
+    with LOCK:  # Serializa las modificaciones concurrentes de documentos.
+        if create:  # Una creación nunca sustituye un archivo del mismo nombre.
+            with path.open(&#x27;x&#x27;, encoding=&#x27;utf-8&#x27;) as file:  # No sobrescribe otro documento.
+                file.write(result)  # Escribe contenido y cabecera de auditoría juntos.
+        else:
+            if not path.exists():  # Comprueba la existencia antes de operar sobre el archivo.
+                raise FileNotFoundError(&#x27;No existe el documento solicitado.&#x27;)  # Modificar no debe crear silenciosamente otro archivo.
+            temporary = path.with_suffix(&#x27;.tmp&#x27;)  # Prepara una escritura segura antes de sustituir el original.
+            temporary.write_text(result, encoding=&#x27;utf-8&#x27;)  # Genera la versión nueva en UTF-8.
+            temporary.replace(path)  # Reemplazo completo para evitar archivos parciales.
+
+
+def retire_part(data, date, user):
+    &quot;&quot;&quot;Retira una pieza sin borrar su historial ni confundirla con faltantes.&quot;&quot;&quot;
+    code = text(data.get(&#x27;code&#x27;, &#x27;&#x27;), &#x27;Código&#x27;, 24).upper()
+    note = text(data.get(&#x27;note&#x27;, &#x27;&#x27;), &#x27;Motivo de baja&#x27;, 240)
+    if data.get(&#x27;confirm&#x27;) != code:
+        raise ValueError(&#x27;Escribe el código exacto para confirmar la baja.&#x27;)
+    with connection() as db:
+        db.execute(&#x27;BEGIN IMMEDIATE&#x27;)
+        row = db.execute(&#x27;SELECT quantity FROM parts WHERE code=? AND active=1&#x27;, (code,)).fetchone()
+        if row is None:
+            raise ValueError(&#x27;La refacción no existe o ya está dada de baja.&#x27;)
+        db.execute(&#x27;UPDATE parts SET active=0 WHERE code=?&#x27;, (code,))
+        db.execute(&#x27;INSERT INTO movements(code,kind,amount,date,user,note) VALUES (?,?,?,?,?,?)&#x27;,
+                   (code, &#x27;Baja&#x27;, row[&#x27;quantity&#x27;], date_text(date), user, note))
+</pre>
+<h2>consola.py</h2>
+<pre>&quot;&quot;&quot;Menú académico: while, for, matriz, tuplas y archivos con espera real.&quot;&quot;&quot;
+import queue  # Comunica el lector de teclado con el temporizador.
+import sys  # Permite terminar limpiamente cuando se cierra la entrada estándar.
+import threading  # Evita que input() bloquee la medición del tiempo.
+import time  # Usa un reloj monotónico para medir intervalos.
+import core  # Comparte inventario y validaciones con la versión web.
+
+# Un único lector permanece activo; no se acumulan hilos tras cada espera.
+INPUT = queue.Queue()
+EOF = object()  # Distingue fin de entrada de una línea vacía válida.
+
+
+def keyboard_reader():  # Un lector único evita hilos acumulados durante la espera.
+    # Funciona en terminales de Windows, macOS y Linux, incluida PyCharm.
+    while True:
+        try:
+            INPUT.put(input())  # El hilo principal recoge después esta respuesta.
+        except EOFError:
+            INPUT.put(EOF)  # El programa saldrá sin un bucle infinito de errores.
+            return
+
+
+def ask(prompt):  # Recoge una entrada del lector de teclado compartido.
+    print(prompt, end=&#x27;&#x27;, flush=True)  # Muestra el texto antes de esperar la entrada.
+    answer = INPUT.get()  # Reutiliza el único lector, incluso después del temporizador.
+    if answer is EOF:
+        raise EOFError  # El bloque principal convierte el fin de entrada en salida normal.
+    return answer.strip()  # Descarta espacios accidentales al inicio y al final.
+
+
+def loading(seconds=1):  # Mantiene visible el aviso durante una espera acotada.
+    # La espera queda limitada a cinco segundos, incluso si se cambia el parámetro.
+    print(&#x27;Cargando el programa…&#x27;, flush=True)
+    time.sleep(min(max(seconds, 0), 5))  # En la ejecución normal dura un segundo.
+
+
+def timed_option(seconds=600):  # Mide la selección; el valor normal es diez minutos.
+    print(&#x27;Selecciona una opción: &#x27;, end=&#x27;&#x27;, flush=True)  # Inicia la medición del menú.
+    started = time.monotonic()  # El reloj no cambia si se ajusta la hora del sistema.
+    for second in range(seconds):  # Requisito: ciclo for para medir hasta diez minutos.
+        remaining = started + second + 1 - time.monotonic()  # Calcula el plazo del segundo actual.
+        try:
+            result = INPUT.get(timeout=max(remaining, 0))  # Espera sin consumir CPU continuamente.
+            if result is EOF:
+                raise EOFError  # Salir si se cierra la consola.
+            print(f&#x27;Tiempo para seleccionar: {time.monotonic()-started:.1f} segundos.&#x27;)
+            return result.strip()  # Devuelve la opción sin esperar los segundos restantes.
+        except queue.Empty:
+            continue  # Un segundo sin entrada no termina todavía la espera.
+    print(&#x27;\nHan pasado 10 minutos sin seleccionar una opción.&#x27;)  # El plazo normal es 600 s.
+    while True:
+        answer = ask(&#x27;¿Deseas continuar? Escribe sí o no: &#x27;).lower()  # Respuesta explícita solicitada.
+        if answer in (&#x27;sí&#x27;, &#x27;si&#x27;):
+            return &#x27;continue&#x27;  # Mantiene usuario y vuelve a presentar el menú.
+        if answer == &#x27;no&#x27;:
+            return &#x27;change&#x27;  # Regresa a la captura de usuario.
+        print(&#x27;Respuesta inválida: escribe sí o no.&#x27;)  # No se acepta una opción ambigua.
+
+
+def login():  # Solicita los datos académicos antes de presentar el menú.
+    while True:
+        try:
+            name = core.text(ask(&#x27;\nNombre o nickname: &#x27;), &#x27;Nombre&#x27;, 40)  # Rechaza nombre vacío.
+            date = core.date_tuple(ask(&#x27;Fecha (dd/mm/aaaa): &#x27;))  # Almacena día, mes y año en tupla.
+            print(&#x27;¡Bienvenido, &#x27; + name + &#x27;!&#x27;)  # Concatenación mediante operadores de string.
+            loading()  # Aviso de carga visible durante un segundo.
+            return name, date  # El menú conserva la fecha capturada.
+        except ValueError as error:
+            print(&#x27;Dato inválido:&#x27;, error)  # Un error vuelve a solicitar los datos.
+
+
+def show_inventory():  # Recorre las piezas y muestra precio y alerta de mínimo.
+    print(&#x27;\nCÓDIGO        PIEZA                              STOCK   MÍNIMO   ALERTA / PRECIO MXN&#x27;)
+    for part in core.inventory():  # Lista de diccionarios retornada por el modelo.
+        low = part[&#x27;quantity&#x27;] &lt;= part[&#x27;minimum&#x27;]  # Incluye existencias iguales al mínimo.
+        print(f&quot;{part[&#x27;code&#x27;]:&lt;13} {part[&#x27;name&#x27;]:&lt;34} {part[&#x27;quantity&#x27;]:&lt;7} {part[&#x27;minimum&#x27;]:&lt;8} {&#x27;REABASTECER&#x27; if low else &#x27;OK&#x27;} | {(&#x27;Pendiente&#x27; if part[&#x27;price_cents&#x27;] is None else format(part[&#x27;price_cents&#x27;]/100, &#x27;.2f&#x27;))}&quot;)
+
+
+def main():  # Coordina la matriz y repite el menú hasta salir.
+    core.initialize()  # Garantiza cuatro archivos previos antes de mostrarlos.
+    threading.Thread(target=keyboard_reader, daemon=True).start()  # Un solo lector de teclado.
+    name, date = login()  # Solicita datos antes de permitir operaciones.
+    options = [  # Matriz con dos columnas: opción y descripción.
+        [&#x27;1&#x27;, &#x27;Leer un archivo&#x27;],
+        [&#x27;2&#x27;, &#x27;Escribir / modificar un archivo&#x27;],
+        [&#x27;3&#x27;, &#x27;Crear un archivo&#x27;],
+        [&#x27;4&#x27;, &#x27;Cambiar usuario&#x27;],
+        [&#x27;5&#x27;, &#x27;Consultar inventario y alertas&#x27;],
+        [&#x27;6&#x27;, &#x27;Registrar refacción&#x27;],
+        [&#x27;7&#x27;, &#x27;Registrar entrada&#x27;],
+        [&#x27;8&#x27;, &#x27;Registrar salida&#x27;],
+        [&#x27;0&#x27;, &#x27;Salir&#x27;],
+    ]
+    while True:  # El menú se repite hasta que la persona elija salir.
+        print(&#x27;\nEL YONKESITO | &#x27; + name + &#x27; | &#x27; + core.date_text(date))
+        print(f&quot;{&#x27;OPCIÓN&#x27;:&lt;8} | ACCIÓN&quot;)  # Encabezados visibles del menú tabular.
+        print(&#x27;-&#x27; * 49)  # Operador string para separar el encabezado.
+        for key, label in options:
+            print(f&#x27;{key:&lt;8} | {label}&#x27;)  # Presenta cada fila de la matriz.
+        try:
+            choice = timed_option()  # Espera hasta 600 segundos usando for.
+            if choice == &#x27;0&#x27;:
+                print(&#x27;Hasta pronto, &#x27; + name + &#x27;.&#x27;)  # Mensaje de despedida personalizado.
+                break  # Única salida elegida del menú principal.
+            if choice in (&#x27;4&#x27;, &#x27;change&#x27;):
+                name, date = login()  # Cambiar usuario también permite capturar otra fecha.
+            elif choice == &#x27;continue&#x27;:
+                continue  # Repite la matriz con el mismo usuario.
+            elif choice in (&#x27;1&#x27;, &#x27;2&#x27;, &#x27;3&#x27;):
+                print(&#x27;Archivos disponibles:&#x27;, core.documents())  # Lista antes de solicitar el nombre.
+                filename = ask(&#x27;Nombre exacto del archivo (con .txt): &#x27;)  # Permite detectar errores de escritura.
+                if choice == &#x27;1&#x27;:
+                    print(core.read_document(filename))  # Lectura real de un archivo de texto.
+                else:
+                    if choice == &#x27;2&#x27;:
+                        print(&#x27;Contenido actual:\n&#x27; + core.read_document(filename))  # Valida que exista.
+                    content = ask(&#x27;Escribe el contenido nuevo (una línea): &#x27;)  # Sustituye el texto anterior.
+                    core.write_document(filename, content, date, name, create=choice == &#x27;3&#x27;)
+                    print(&#x27;Archivo guardado con fecha &#x27; + core.date_text(date))  # Evidencia el uso de la tupla.
+            elif choice == &#x27;5&#x27;:
+                show_inventory()  # Comparte el mismo inventario persistente que la web.
+            elif choice == &#x27;6&#x27;:
+                fields = [(&#x27;code&#x27;, &#x27;Código&#x27;), (&#x27;name&#x27;, &#x27;Nombre&#x27;), (&#x27;category&#x27;, &#x27;Categoría&#x27;), (&#x27;vehicle&#x27;, &#x27;Aplicación&#x27;), (&#x27;condition&#x27;, &#x27;Condición: Usada, Nueva o Reacondicionada&#x27;), (&#x27;quantity&#x27;, &#x27;Existencias&#x27;), (&#x27;minimum&#x27;, &#x27;Stock mínimo&#x27;), (&#x27;price&#x27;, &#x27;Precio unitario en MXN&#x27;)]
+                data = {key: ask(label + &#x27;: &#x27;) for key, label in fields}  # Captura los campos en un diccionario.
+                core.add_part(data, date, name)  # Valida duplicados y cantidades antes de guardar.
+                print(&#x27;Refacción registrada.&#x27;)  # Confirma una transacción completada.
+            elif choice in (&#x27;7&#x27;, &#x27;8&#x27;):
+                data = {&#x27;code&#x27;: ask(&#x27;Código: &#x27;), &#x27;amount&#x27;: ask(&#x27;Cantidad: &#x27;), &#x27;note&#x27;: ask(&#x27;Motivo: &#x27;), &#x27;kind&#x27;: &#x27;Entrada&#x27; if choice == &#x27;7&#x27; else &#x27;Salida&#x27;}
+                print(&#x27;Existencias actualizadas:&#x27;, core.move(data, date, name))  # Nunca permite stock negativo.
+            else:
+                print(&#x27;Opción inválida. Elige un número de la matriz.&#x27;)  # El menú continúa disponible.
+        except (ValueError, OSError, UnicodeError) as error:
+            print(&#x27;No se pudo completar la operación:&#x27;, error)  # Maneja nombres erróneos y archivos inexistentes.
+
+
+if __name__ == &#x27;__main__&#x27;:
+    try:
+        main()  # Ejecutar este archivo abre la versión académica en consola.
+    except (EOFError, KeyboardInterrupt):
+        print(&#x27;\nPrograma finalizado.&#x27;)  # Ctrl+C no muestra un error técnico al usuario.
+        sys.exit(0)  # Terminación normal, no un fallo de ejecución.
+</pre>
+<h2>seguridad.py</h2>
+<pre>&quot;&quot;&quot;Contraseña propia, configuración privada y sesiones persistentes del taller.&quot;&quot;&quot;
+import hashlib  # Deriva una huella costosa; no almacena la contraseña original.
+import hmac  # Compara las huellas sin abandonar al primer carácter distinto.
+import json  # Guarda la configuración local fuera del código fuente.
+import os  # Lee los secretos del alojamiento cuando se publica.
+import secrets  # Crea sales y tokens criptográficamente aleatorios.
+import time  # Expira sesiones e intentos utilizando segundos UTC.
+import core  # Reutiliza la carpeta de datos y las transacciones SQLite.
+
+
+def hash_password(password):  # Genera una huella portable sin bibliotecas adicionales.
+    if not isinstance(password, str) or not 12 &lt;= len(password) &lt;= 128:  # Evita claves cortas o entradas excesivas.
+        raise ValueError(&#x27;Usa una contraseña de 12 a 128 caracteres.&#x27;)  # La clave se elige fuera del chat.
+    salt = secrets.token_hex(16)  # Cada configuración obtiene una sal independiente.
+    digest = hashlib.pbkdf2_hmac(&#x27;sha256&#x27;, password.encode(), bytes.fromhex(salt), 600000)  # Hace costosos los intentos masivos.
+    return &#x27;pbkdf2_sha256$600000$&#x27; + salt + &#x27;$&#x27; + digest.hex()  # No contiene la contraseña original.
+
+
+def verify_password(password, encoded):  # Valida en el servidor, nunca en JavaScript.
+    try:  # Una configuración dañada no debe conceder acceso.
+        algorithm, rounds, salt, expected = encoded.split(&#x27;$&#x27;)  # Recupera parámetros públicos de la derivación.
+        if algorithm != &#x27;pbkdf2_sha256&#x27; or not 100000 &lt;= int(rounds) &lt;= 1000000 or len(str(password)) &gt; 128:  # Acota el trabajo.
+            return False  # Rechaza formatos inesperados.
+        digest = hashlib.pbkdf2_hmac(&#x27;sha256&#x27;, str(password).encode(), bytes.fromhex(salt), int(rounds))  # Recalcula la huella.
+        return hmac.compare_digest(digest.hex(), expected)  # No compara contraseñas en texto claro.
+    except (ValueError, TypeError):  # Maneja configuración incompleta o valores inválidos.
+        return False  # Fallo cerrado.
+
+
+def load_hash():  # Prefiere el secreto del servidor a la configuración local.
+    value = os.environ.get(&#x27;YONKESITO_PASSWORD_HASH&#x27;)  # El alojamiento no necesita la clave en texto claro.
+    if value:  # El proveedor inyecta esta variable privada.
+        return value  # No se devuelve al navegador.
+    path = core.ROOT / &#x27;acceso.json&#x27;  # Se excluye de ZIP y Git.
+    if path.exists():  # La primera ejecución requiere configurar la clave.
+        return json.loads(path.read_text(encoding=&#x27;utf-8&#x27;))[&#x27;password_hash&#x27;]  # Lee solo la huella.
+    raise RuntimeError(&#x27;Primero ejecuta configurar_acceso.py y define la contraseña del taller.&#x27;)  # Instrucción recuperable.
+
+
+def initialize():  # Crea almacenamiento de autenticación sin introducir piezas.
+    with core.connection() as db:  # Transacción y cierre automático.
+        db.execute(&#x27;CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, payload TEXT NOT NULL, expires REAL NOT NULL)&#x27;)  # Tokens se guardan como hash.
+        db.execute(&#x27;CREATE TABLE IF NOT EXISTS login_attempts (ip TEXT PRIMARY KEY, count INTEGER NOT NULL, until REAL NOT NULL)&#x27;)  # Límite persistente de intentos.
+
+
+def token_hash(token):  # Un volcado de la base no debe revelar cookies utilizables.
+    return hashlib.sha256(token.encode()).hexdigest()  # La cookie real tiene 256 bits aleatorios.
+
+
+def reserve_attempt(ip):  # Limita a cinco intentos por dirección cada quince minutos.
+    now = time.time()  # Evita depender de la fecha declarada por el usuario.
+    with core.connection() as db:  # Comparte límite entre reinicios y solicitudes.
+        db.execute(&#x27;BEGIN IMMEDIATE&#x27;)  # Serializa comprobación y actualización.
+        db.execute(&#x27;DELETE FROM login_attempts WHERE until &lt;= ?&#x27;, (now,))  # Limpia ventanas vencidas.
+        row = db.execute(&#x27;SELECT count FROM login_attempts WHERE ip=?&#x27;, (ip,)).fetchone()  # IP proporcionada por el servidor.
+        if row and row[&#x27;count&#x27;] &gt;= 5:  # No intenta derivar otra contraseña durante el bloqueo.
+            return False  # La interfaz devuelve HTTP 429.
+        db.execute(&#x27;INSERT INTO login_attempts VALUES (?,1,?) ON CONFLICT(ip) DO UPDATE SET count=count+1&#x27;, (ip, now + 900))  # Incremento atómico.
+        return True  # Permite comprobar esta contraseña.
+
+
+def clear_attempts(ip):  # Un ingreso correcto cancela los errores anteriores de esa dirección.
+    with core.connection() as db:  # Confirmación automática al terminar.
+        db.execute(&#x27;DELETE FROM login_attempts WHERE ip=?&#x27;, (ip,))  # No afecta a otros visitantes.
+
+
+def new_session(name, date, password_hash):  # Crea sesión de ocho horas con rol fijado por el servidor.
+    token = secrets.token_urlsafe(32)  # Nunca se acepta el identificador enviado por el formulario.
+    value = {&#x27;name&#x27;: name, &#x27;date&#x27;: date, &#x27;role&#x27;: &#x27;staff&#x27;, &#x27;csrf&#x27;: secrets.token_urlsafe(32), &#x27;revision&#x27;: token_hash(password_hash)}  # Vincula la sesión a la clave vigente.
+    with core.connection() as db:  # Guarda sin revelar el token de la cookie.
+        db.execute(&#x27;DELETE FROM sessions WHERE expires &lt;= ?&#x27;, (time.time(),))  # Limpia sesiones caducadas.
+        db.execute(&#x27;INSERT INTO sessions VALUES (?,?,?)&#x27;, (token_hash(token), json.dumps(value), time.time() + 28800))  # Límite absoluto de ocho horas.
+    return token, value  # Solo la respuesta HTTP recibe el token original.
+
+
+def get_session(token, password_hash):  # Toda operación interna vuelve a verificar permisos.
+    with core.connection() as db:  # Consulta parametrizada.
+        row = db.execute(&#x27;SELECT payload FROM sessions WHERE token=? AND expires&gt;?&#x27;, (token_hash(token), time.time())).fetchone()  # Rechaza expiración.
+    if not row:  # Un cliente anónimo no tiene una sesión válida.
+        return None  # El catálogo público sigue funcionando.
+    value = json.loads(row[&#x27;payload&#x27;])  # Solo datos generados por este módulo.
+    if value.get(&#x27;revision&#x27;) != token_hash(password_hash):  # Cambiar la contraseña invalida accesos anteriores.
+        return None  # Obliga a autenticarse otra vez.
+    value[&#x27;date&#x27;] = tuple(value[&#x27;date&#x27;])  # Restaura explícitamente la tupla de la rúbrica.
+    return value  # Nunca depende del rol indicado por el navegador.
+
+
+def revoke(token):  # Cierra realmente la sesión del servidor.
+    with core.connection() as db:  # También funciona después de un reinicio.
+        db.execute(&#x27;DELETE FROM sessions WHERE token=?&#x27;, (token_hash(token),))  # Impide reutilizar la cookie cerrada.
+</pre>
+<h2>configurar_acceso.py</h2>
+<pre>&quot;&quot;&quot;Ejecutar en la terminal de PyCharm para crear o cambiar la clave del taller.&quot;&quot;&quot;
+import getpass  # Oculta la contraseña durante la captura.
+import json  # Guarda únicamente su derivación criptográfica.
+import os  # Restringe permisos locales cuando el sistema lo permite.
+import sys  # Permite generar la configuración del alojamiento.
+import core  # Usa la misma carpeta de datos que el servidor.
+from seguridad import hash_password  # Comparte la política de longitud y algoritmo.
+
+
+def main():  # No existe una contraseña predeterminada en esta entrega.
+    print(&#x27;CONFIGURACIÓN DEL ACCESO DEL TALLER&#x27;)  # Diferencia configuración de inicio de sesión.
+    password = getpass.getpass(&#x27;Nueva contraseña (12 a 128 caracteres): &#x27;)  # No se imprime ni guarda en claro.
+    confirm = getpass.getpass(&#x27;Repite la contraseña: &#x27;)  # Evita configurar una clave con errores de escritura.
+    if password != confirm:  # No altera la clave anterior ante un error.
+        raise ValueError(&#x27;Las contraseñas no coinciden. Ejecuta el programa de nuevo.&#x27;)  # Explicación directa.
+    encoded = hash_password(password)  # Aplica la validación antes de escribir.
+    if &#x27;--alojamiento&#x27; in sys.argv:  # Genera un valor que se puede copiar al panel del proveedor.
+        print(&#x27;Copia SOLO la siguiente línea en YONKESITO_PASSWORD_HASH del alojamiento:&#x27;)  # La huella también debe mantenerse privada.
+        print(encoded)  # Salida solicitada expresamente con --alojamiento.
+        return  # No cambia el acceso local en este modo.
+    core.ROOT.mkdir(parents=True, exist_ok=True)  # Crea carpeta local si aún no existe.
+    path = core.ROOT / &#x27;acceso.json&#x27;  # Nunca debe subirse al repositorio ni incluirse en la entrega.
+    temporary = path.with_suffix(&#x27;.tmp&#x27;)  # Escritura completa antes de reemplazar.
+    temporary.write_text(json.dumps({&#x27;password_hash&#x27;: encoded}), encoding=&#x27;utf-8&#x27;)  # Solo la huella queda persistida.
+    os.chmod(temporary, 0o600)  # Solo el propietario en sistemas POSIX; usar permisos NTFS en Windows.
+    temporary.replace(path)  # Confirma el cambio al terminar la escritura.
+    print(&#x27;Acceso configurado. Reinicia app.py si estaba abierto.&#x27;)  # El reinicio aplica la clave nueva e invalida sesiones anteriores.
+
+
+if __name__ == &#x27;__main__&#x27;:  # Importar el módulo no solicita contraseñas.
+    try:  # Los errores no imprimen datos sensibles.
+        main()  # Ejecuta la configuración interactiva.
+    except (ValueError, OSError, KeyboardInterrupt, EOFError) as error:  # Maneja cancelaciones o fallos de archivo.
+        print(&#x27;No se completó la configuración:&#x27;, error)  # Mantiene instrucciones legibles.
+        sys.exit(1)  # Permite detectar un fallo desde una terminal.
+</pre>
+<h2>test_proyecto.py</h2>
+<pre>&quot;&quot;&quot;Pruebas de depuración aisladas: python -m unittest -v test_proyecto.py.&quot;&quot;&quot;
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
+import unittest
+import core
+import consola
+
+
+class ProjectTests(unittest.TestCase):
+    def setUp(self):
+        # Cada caso trabaja en una carpeta temporal; nunca cambia el inventario real.
+        self.temp = TemporaryDirectory()
+        self.root, self.docs = core.ROOT, core.DOCS
+        core.ROOT = Path(self.temp.name)
+        core.DOCS = core.ROOT / &#x27;documentos&#x27;
+        core.initialize()
+        self.assertEqual(core.inventory(), [])
+        self.fixture = {&#x27;code&#x27;:&#x27;MOT-001&#x27;,&#x27;name&#x27;:&#x27;Pieza de prueba&#x27;,&#x27;category&#x27;:&#x27;Motor&#x27;,&#x27;vehicle&#x27;:&#x27;Aplicación de prueba&#x27;,&#x27;condition&#x27;:&#x27;Usada&#x27;,&#x27;quantity&#x27;:6,&#x27;minimum&#x27;:2,&#x27;price&#x27;:&#x27;150.25&#x27;}
+        core.add_part(self.fixture, (23,9,2026), &#x27;Pruebas&#x27;)
+        core.add_part(dict(self.fixture, code=&#x27;SUS-004&#x27;, quantity=1), (23,9,2026), &#x27;Pruebas&#x27;)
+        self.date = core.date_tuple(&#x27;23/09/2026&#x27;)
+
+    def tearDown(self):
+        # Devuelve la configuración original después de cada prueba.
+        core.ROOT, core.DOCS = self.root, self.docs
+        self.temp.cleanup()
+
+    def test_date_tuple_and_invalid_calendar(self):
+        self.assertEqual(self.date, (23, 9, 2026))
+        for value in [&#x27;31/02/2026&#x27;, &#x27;2026-09-23&#x27;, &#x27;1/1/2026&#x27;]:
+            with self.assertRaises(ValueError):
+                core.date_tuple(value)
+
+    def test_four_documents_and_missing_file(self):
+        self.assertEqual(len(core.documents()), 4)
+        self.assertIn(&#x27;El Yonkesito&#x27;, core.read_document(&#x27;bienvenida.txt&#x27;))
+        with self.assertRaises(FileNotFoundError):
+            core.read_document(&#x27;ausente.txt&#x27;)
+
+    def test_document_creation_update_date_and_duplicate(self):
+        core.write_document(&#x27;prueba.txt&#x27;, &#x27;Texto inicial&#x27;, self.date, &#x27;Eric&#x27;, True)
+        with self.assertRaises(FileExistsError):
+            core.write_document(&#x27;prueba.txt&#x27;, &#x27;Otra captura&#x27;, self.date, &#x27;Eric&#x27;, True)
+        old = core.read_document(&#x27;prueba.txt&#x27;)
+        core.write_document(&#x27;prueba.txt&#x27;, old + &#x27;Revisado&#x27;, (24, 9, 2026), &#x27;Eric&#x27;)
+        result = core.read_document(&#x27;prueba.txt&#x27;)
+        self.assertIn(&#x27;24/09/2026&#x27;, result)
+        self.assertEqual(result.count(&#x27;Fecha:&#x27;), 1)
+        self.assertIn(&#x27;Revisado&#x27;, result)
+
+    def test_paths_and_quantities_rejected(self):
+        for name in [&#x27;../app.py&#x27;, &#x27;otro/archivo.txt&#x27;, &#x27;mal escrito.txt&#x27;]:
+            with self.assertRaises(ValueError):
+                core.read_document(name)
+        for value in [&#x27;-1&#x27;, &#x27;1.5&#x27;, &#x27;abc&#x27;, &#x27;10000000&#x27;]:
+            with self.assertRaises(ValueError):
+                core.integer(value, &#x27;Cantidad&#x27;)
+
+    def test_entry_exit_and_stock_guard(self):
+        data = {&#x27;code&#x27;: &#x27;MOT-001&#x27;, &#x27;kind&#x27;: &#x27;Entrada&#x27;, &#x27;amount&#x27;: 2, &#x27;note&#x27;: &#x27;Recepción&#x27;}
+        self.assertEqual(core.move(data, self.date, &#x27;Eric&#x27;), 8)
+        data.update(kind=&#x27;Salida&#x27;, amount=6)
+        self.assertEqual(core.move(data, self.date, &#x27;Eric&#x27;), 2)
+        self.assertEqual(core.history()[0][&#x27;date&#x27;], &#x27;23/09/2026&#x27;)
+        data[&#x27;amount&#x27;] = 3
+        with self.assertRaises(ValueError):
+            core.move(data, self.date, &#x27;Eric&#x27;)
+        self.assertEqual(next(p for p in core.inventory() if p[&#x27;code&#x27;]==&#x27;MOT-001&#x27;)[&#x27;quantity&#x27;], 2)
+
+    def test_duplicate_code_and_persistence(self):
+        data = dict(self.fixture)
+        with self.assertRaises(ValueError):
+            core.add_part(data, self.date, &#x27;Eric&#x27;)
+        data[&#x27;code&#x27;] = &#x27;NUE-009&#x27;
+        core.add_part(data, self.date, &#x27;Eric&#x27;)
+        core.initialize()
+        self.assertEqual(len(core.inventory()), 3)
+
+    def test_concurrent_dispatch_keeps_stock_nonnegative(self):
+        def dispatch():
+            try:
+                core.move({&#x27;code&#x27;:&#x27;SUS-004&#x27;,&#x27;kind&#x27;:&#x27;Salida&#x27;,&#x27;amount&#x27;:1,&#x27;note&#x27;:&#x27;Prueba&#x27;},self.date,&#x27;Eric&#x27;)
+                return True
+            except ValueError:
+                return False
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            result = list(pool.map(lambda _:dispatch(), range(2)))
+        self.assertEqual(sum(result), 1)
+
+    def test_price_precision_and_validation(self):
+        self.assertEqual(core.price_cents(&#x27;125.05&#x27;), 12505)
+        self.assertEqual(core.price_cents(&#x27;0&#x27;), 0)
+        for value in [&#x27;&#x27;, &#x27;-1&#x27;, &#x27;1.555&#x27;, &#x27;NaN&#x27;, &#x27;Infinity&#x27;, &#x27;1e2&#x27;]:
+            with self.assertRaises(ValueError):
+                core.price_cents(value)
+        core.set_price({&#x27;code&#x27;:&#x27;MOT-001&#x27;,&#x27;price&#x27;:&#x27;99.90&#x27;})
+        self.assertEqual(next(p for p in core.inventory() if p[&#x27;code&#x27;]==&#x27;MOT-001&#x27;)[&#x27;price_cents&#x27;],9990)
+
+    def test_timer_continue_and_change_without_ten_minute_wait(self):
+        # Se acorta solo el parámetro de prueba; producción conserva 600 segundos.
+        with patch(&#x27;consola.ask&#x27;, return_value=&#x27;sí&#x27;):
+            self.assertEqual(consola.timed_option(seconds=0), &#x27;continue&#x27;)
+        with patch(&#x27;consola.ask&#x27;, return_value=&#x27;no&#x27;):
+            self.assertEqual(consola.timed_option(seconds=0), &#x27;change&#x27;)
+        consola.INPUT.put(&#x27;5&#x27;)
+        self.assertEqual(consola.timed_option(seconds=1), &#x27;5&#x27;)
+
+
+if __name__ == &#x27;__main__&#x27;:
+    unittest.main()
+</pre>
+<h2>test_web.py</h2>
+<pre>&quot;&quot;&quot;Pruebas HTTP aisladas: autenticación, permisos y persistencia.&quot;&quot;&quot;
+from pathlib import Path  # Rutas temporales compatibles con Windows.
+from tempfile import TemporaryDirectory  # No toca datos reales.
+import unittest  # Ejecución reproducible de casos.
+import core  # Reglas compartidas.
+import seguridad  # Contraseñas y sesiones.
+from app import create_app  # Cliente HTTP de prueba de Flask.
+
+
+class WebTests(unittest.TestCase):  # Casos de comportamiento observable.
+    @classmethod  # Deriva una clave sintética por conjunto.
+    def setUpClass(cls):  # No es una contraseña predeterminada del programa.
+        cls.password = &#x27;Solo-Pruebas-12345&#x27;  # Exclusiva de pruebas temporales.
+        cls.encoded = seguridad.hash_password(cls.password)  # Derivación aleatoria.
+
+    def setUp(self):  # Un inventario limpio por caso.
+        self.temp = TemporaryDirectory()  # Directorio desechable.
+        self.previous = core.ROOT, core.DOCS  # Respalda rutas.
+        core.ROOT = Path(self.temp.name)  # Aísla base.
+        core.DOCS = core.ROOT / &#x27;documentos&#x27;  # Aísla archivos.
+        self.app = create_app({&#x27;TESTING&#x27;: True, &#x27;PASSWORD_HASH&#x27;: self.encoded})  # Sin secretos reales.
+        self.client = self.app.test_client()  # Conserva cookies de prueba.
+        self.part = dict(code=&#x27;PRU-1&#x27;, name=&#x27;Pieza temporal&#x27;, category=&#x27;Motor&#x27;, vehicle=&#x27;Vehículo de prueba&#x27;, condition=&#x27;Usada&#x27;, quantity=2, minimum=1, price=&#x27;125.05&#x27;)  # No se distribuye como dato.
+        self.headers = {&#x27;Origin&#x27;: &#x27;http://localhost&#x27;}  # Origen legítimo.
+
+    def tearDown(self):  # Restaura configuración anterior.
+        core.ROOT, core.DOCS = self.previous  # Datos reales intactos.
+        self.temp.cleanup()  # Borra solo el entorno de prueba.
+
+    def login(self):  # Ingresa con nombre, fecha y clave.
+        result = self.client.post(&#x27;/api/login&#x27;, json={&#x27;name&#x27;:&#x27;Pruebas&#x27;, &#x27;date&#x27;:&#x27;24/09/2026&#x27;, &#x27;password&#x27;:self.password}, headers=self.headers)  # Formulario completo.
+        self.assertEqual(result.status_code, 200)  # Acceso correcto.
+        self.headers[&#x27;X-CSRF-Token&#x27;] = result.json[&#x27;session&#x27;][&#x27;csrf&#x27;]  # Token recibido del servidor.
+        return result  # Permite revisar cookie.
+
+    def test_empty_public_catalog_and_denied_edits(self):  # Solo inventario público.
+        self.assertEqual(self.client.get(&#x27;/api/inventory&#x27;).json, {&#x27;items&#x27;: []})  # Sin piezas precargadas.
+        for endpoint in (&#x27;parts&#x27;, &#x27;price&#x27;, &#x27;move&#x27;, &#x27;retire&#x27;):  # Cada escritura requiere sesión.
+            self.assertEqual(self.client.post(&#x27;/api/&#x27;+endpoint, json={&#x27;role&#x27;:&#x27;staff&#x27;}, headers=self.headers).status_code, 401)  # Rol inventado no sirve.
+        self.assertEqual(self.client.get(&#x27;/api/documents&#x27;).status_code, 401)  # Documentos protegidos.
+        self.assertEqual(self.client.get(&#x27;/datos/acceso.json&#x27;).status_code, 404)  # Secretos inaccesibles.
+
+    def test_password_limit_and_wrong_origin(self):  # Cinco intentos cada quince minutos.
+        for _ in range(5):  # Verifica el límite sin esperas reales.
+            self.assertEqual(self.client.post(&#x27;/api/login&#x27;, json={&#x27;password&#x27;:&#x27;incorrecta&#x27;}, headers=self.headers).status_code, 403)  # Clave inválida.
+        self.assertEqual(self.client.post(&#x27;/api/login&#x27;, json={&#x27;password&#x27;:self.password}, headers=self.headers).status_code, 429)  # Sexto bloqueado.
+        self.assertEqual(self.client.post(&#x27;/api/login&#x27;, json={}, headers={&#x27;Origin&#x27;:&#x27;https://ajeno.example&#x27;}).status_code, 403)  # Origen ajeno rechazado.
+
+    def test_staff_price_movement_and_public_filter(self):  # Flujo principal completo.
+        self.login()  # Obtiene sesión legítima.
+        self.assertEqual(self.client.post(&#x27;/api/parts&#x27;, json=self.part, headers=self.headers).status_code, 200)  # Alta individual.
+        self.assertEqual(self.client.post(&#x27;/api/price&#x27;, json={&#x27;code&#x27;:&#x27;PRU-1&#x27;,&#x27;price&#x27;:&#x27;199.90&#x27;}, headers=self.headers).status_code, 200)  # Modifica precio.
+        guest = self.app.test_client()  # Visitante independiente.
+        record = guest.get(&#x27;/api/inventory&#x27;).json[&#x27;items&#x27;][0]  # Lectura pública.
+        self.assertEqual(record[&#x27;price_cents&#x27;], 19990)  # Centavos exactos.
+        self.assertNotIn(&#x27;minimum&#x27;, record)  # Umbral interno oculto.
+        move = dict(code=&#x27;PRU-1&#x27;, kind=&#x27;Salida&#x27;, amount=2, note=&#x27;Prueba&#x27;)  # Agota la pieza temporal.
+        self.assertEqual(self.client.post(&#x27;/api/move&#x27;, json=move, headers=self.headers).status_code, 200)  # Salida válida.
+        self.assertEqual(guest.get(&#x27;/api/inventory&#x27;).json[&#x27;items&#x27;], [])  # Agotada no es pública.
+        self.assertEqual(self.client.post(&#x27;/api/move&#x27;, json=move, headers=self.headers).status_code, 400)  # Sin saldo negativo.
+
+    def test_csrf_logout_and_restart(self):  # Persistencia y revocación real.
+        self.login()  # Captura sesión.
+        cookie = self.client.get_cookie(&#x27;session&#x27;).value  # Cookie sintética.
+        self.assertEqual(self.client.post(&#x27;/api/parts&#x27;, json=self.part, headers={&#x27;Origin&#x27;:&#x27;http://localhost&#x27;}).status_code, 403)  # Sin CSRF se rechaza.
+        restarted = create_app({&#x27;TESTING&#x27;:True,&#x27;PASSWORD_HASH&#x27;:self.encoded}).test_client()  # Simula reinicio.
+        restarted.set_cookie(&#x27;session&#x27;, cookie)  # Mismo navegador.
+        self.assertEqual(restarted.get(&#x27;/api/session&#x27;).json[&#x27;session&#x27;][&#x27;role&#x27;], &#x27;staff&#x27;)  # Sesión persistida.
+        self.assertEqual(self.client.post(&#x27;/api/logout&#x27;, json={}, headers=self.headers).status_code, 200)  # Cierre en servidor.
+        self.assertEqual(restarted.get(&#x27;/api/session&#x27;).json[&#x27;session&#x27;][&#x27;role&#x27;], &#x27;client&#x27;)  # Cookie anterior ya no sirve.
+
+    def test_retire_permissions_confirmation_and_persistence(self):
+        self.login()
+        self.client.post(&#x27;/api/parts&#x27;, json=self.part, headers=self.headers)
+        data = dict(code=&#x27;PRU-1&#x27;, note=&#x27;Descontinuada&#x27;, confirm=&#x27;PRU-1&#x27;)
+        guest = self.app.test_client()
+        self.assertEqual(guest.post(&#x27;/api/retire&#x27;, json=data, headers=self.headers).status_code, 401)
+        self.assertEqual(self.client.post(&#x27;/api/retire&#x27;, json=data, headers={&#x27;Origin&#x27;:&#x27;http://localhost&#x27;}).status_code, 403)
+        self.assertEqual(self.client.post(&#x27;/api/retire&#x27;, json={**data, &#x27;confirm&#x27;:&#x27;NO&#x27;}, headers=self.headers).status_code, 400)
+        self.assertEqual(len(core.inventory()), 1)
+        self.assertEqual(self.client.post(&#x27;/api/retire&#x27;, json=data, headers=self.headers).status_code, 200)
+        core.initialize()
+        self.assertEqual(core.inventory(), [])
+        self.assertEqual(guest.get(&#x27;/api/inventory&#x27;).json[&#x27;items&#x27;], [])
+        self.assertEqual(core.history()[0][&#x27;kind&#x27;], &#x27;Baja&#x27;)
+        self.assertEqual(len(core.history()), 2)
+        self.assertEqual(self.client.post(&#x27;/api/retire&#x27;, json=data, headers=self.headers).status_code, 400)
+        self.assertEqual(self.client.post(&#x27;/api/price&#x27;, json={&#x27;code&#x27;:&#x27;PRU-1&#x27;,&#x27;price&#x27;:&#x27;5&#x27;}, headers=self.headers).status_code, 400)
+        self.assertEqual(self.client.post(&#x27;/api/move&#x27;, json={&#x27;code&#x27;:&#x27;PRU-1&#x27;,&#x27;kind&#x27;:&#x27;Entrada&#x27;,&#x27;amount&#x27;:1,&#x27;note&#x27;:&#x27;x&#x27;}, headers=self.headers).status_code, 400)
+        self.assertEqual(self.client.get(&#x27;/api/documents&#x27;).status_code, 404)
+        self.assertEqual(self.client.post(&#x27;/api/document&#x27;, json={}, headers=self.headers).status_code, 404)
+
+    def test_migration_preserves_existing_inventory(self):
+        with core.connection() as db:
+            db.execute(&#x27;DROP TABLE parts&#x27;)
+            db.execute(&#x27;CREATE TABLE parts (code TEXT PRIMARY KEY, name TEXT, quantity INTEGER, minimum INTEGER, price_cents INTEGER)&#x27;)
+            db.execute(&quot;INSERT INTO parts VALUES (&#x27;OLD&#x27;,&#x27;Anterior&#x27;,0,1,123)&quot;)
+        core.initialize()
+        self.assertEqual(core.inventory()[0][&#x27;active&#x27;], 1)
+        self.assertEqual(core.inventory()[0][&#x27;price_cents&#x27;], 123)
+
+    def test_password_rotation_and_https_cookie(self):  # Protecciones de alojamiento.
+        self.app.config[&#x27;SECURE_COOKIE&#x27;] = True  # HTTPS configurado.
+        result = self.login()  # Cookie emitida.
+        self.assertIn(&#x27;Secure;&#x27;, result.headers[&#x27;Set-Cookie&#x27;])  # Solo HTTPS.
+        self.assertIn(&#x27;HttpOnly;&#x27;, result.headers[&#x27;Set-Cookie&#x27;])  # JS no puede leerla.
+        self.app.config[&#x27;PASSWORD_HASH&#x27;] = seguridad.hash_password(&#x27;Otra-Clave-Prueba-123&#x27;)  # Rota clave.
+        self.assertEqual(self.client.get(&#x27;/api/session&#x27;).json[&#x27;session&#x27;][&#x27;role&#x27;], &#x27;client&#x27;)  # Sesiones anteriores inválidas.
+
+
+if __name__ == &#x27;__main__&#x27;:  # También ejecutable desde PyCharm.
+    unittest.main()  # Devuelve fallo si un caso no cumple.
+</pre>
+</html>

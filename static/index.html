@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>El Yonkesito · Refacciones</title><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/style.css"><script defer src="/main.js"></script></head>
+<body>
+<section id="login" class="login-layout" hidden>
+  <aside class="welcome-panel"><a class="brand" href="/"><span class="brand-icon">Y</span> EL YONKESITO<span class="brand-dot">.</span></a><div><span class="eyebrow">REFACCIONES / SEGUNDAS OPORTUNIDADES</span><h1>Cada pieza<br>cuenta.</h1><p>Encuentra lo que necesitas.<br>Mantén tu taller en movimiento.</p><div class="welcome-rule"></div><span class="small">Inventario claro. Trabajo que avanza.</span></div><footer>CONTROL DE REFACCIONES <span>01 / ACCESO</span></footer></aside>
+  <main class="login-main"><span class="eyebrow orange">BIENVENIDO A EL YONKESITO</span><h2>Acceso del taller</h2><p class="muted">Ingresa tu nombre, fecha de trabajo y contraseña del taller.</p>
+  <form id="login-form"><input type="hidden" name="role" value="staff">
+  <label>Tu nombre o nickname<input name="name" required maxlength="40" placeholder="¿Cómo te llamas?" autocomplete="given-name"></label>
+  <label>Fecha de trabajo<input name="date" required placeholder="dd/mm/aaaa" inputmode="numeric" pattern="\d{2}/\d{2}/\d{4}" maxlength="10"><small>Formato: dd/mm/aaaa. Se usará en tus registros.</small></label>
+  <label id="password-label">Clave del taller<input name="password" required maxlength="128" type="password" autocomplete="current-password" placeholder="Ingresa la clave de acceso"></label>
+  <p id="login-error" class="error" role="alert"></p><button class="primary full" id="enter" type="submit">Entrar al taller <span>→</span></button><p class="demo-note"><a href="/">Volver al catálogo público</a></p></form></main>
+</section>
+<div id="workspace" hidden>
+  <aside class="sidebar"><a class="brand" href="/"><span class="brand-icon">Y</span><span>EL YONKESITO<span class="brand-dot">.</span></span></a><p class="nav-caption" id="space-label">ESPACIO DEL TALLER</p><nav id="navigation" aria-label="Navegación principal"></nav><a class="staff-access" id="staff-access" href="/taller">Acceso del taller ↗</a><div class="sidebar-bottom"><div class="avatar" id="avatar">Y</div><div><strong id="user-label"></strong><small id="role-label"></small></div><button id="logout" hidden class="icon-button" title="Cambiar usuario" aria-label="Cambiar usuario">↪</button></div></aside>
+  <main class="main"><header class="topbar"><span id="breadcrumb">Taller / Inventario</span><span id="work-date"></span></header><div class="page-heading"><div><span class="eyebrow orange" id="kicker">TODO EN SU LUGAR</span><h1 id="page-title">Inventario de refacciones</h1><p id="page-description" class="muted"></p></div><button class="primary" id="add-part">+ Nueva refacción</button></div>
+  <div id="stats" class="stats"></div>
+  <section id="inventory-view"><div class="toolbar"><label class="search-label"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Buscar por pieza, código o vehículo…" aria-label="Buscar refacciones"></label><select id="category" aria-label="Filtrar por categoría"><option value="">Todas las categorías</option></select><select id="availability" aria-label="Filtrar por disponibilidad"><option value="">Todos los estados</option><option value="available">Disponibles</option><option value="low">Stock bajo</option><option value="out">Agotadas</option></select></div><div class="results-line"><span id="result-count"></span><span id="catalog-note">Inventario del taller</span></div><div id="inventory-content"></div></section>
+  <section id="history-view" hidden></section>
+  <footer class="page-footer"><span>EL YONKESITO · REFACCIONES</span><span>Consulta de inventario del taller</span></footer></main>
+</div>
+<dialog id="modal"><form id="modal-form"><div class="modal-header"><div><span class="eyebrow orange" id="modal-kicker">INVENTARIO</span><h2 id="modal-title"></h2></div><button type="button" class="icon-button close-modal" aria-label="Cerrar ventana">×</button></div><div id="modal-body"></div><p id="modal-error" class="error" role="alert"></p><div class="modal-footer"><button type="button" class="secondary close-modal">Cerrar</button><button type="submit" class="primary" id="modal-save">Guardar</button></div></form></dialog>
+<dialog id="idle-modal"><form id="idle-form"><span class="eyebrow orange">¿SIGUES AQUÍ?</span><h2>Tu espacio sigue abierto</h2><p>Han pasado 10 minutos sin seleccionar una opción.<br>Escribe “sí” para continuar o “no” para cambiar de usuario.</p><label>Tu respuesta<input name="answer" required autocomplete="off" placeholder="sí / no"></label><p class="error" id="idle-error" role="alert"></p><button type="submit" class="primary">Continuar</button></form></dialog>
+<div id="loading" hidden role="status"><div class="spinner"></div><strong>Cargando tu espacio…</strong><span>Preparando las refacciones</span></div><div id="toast" role="status" hidden></div>
+</body></html>

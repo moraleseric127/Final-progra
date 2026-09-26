@@ -1,0 +1,26 @@
+test_concurrent_dispatch_keeps_stock_nonnegative (test_proyecto.ProjectTests.test_concurrent_dispatch_keeps_stock_nonnegative) ... ok
+test_date_tuple_and_invalid_calendar (test_proyecto.ProjectTests.test_date_tuple_and_invalid_calendar) ... ok
+test_document_creation_update_date_and_duplicate (test_proyecto.ProjectTests.test_document_creation_update_date_and_duplicate) ... ok
+test_duplicate_code_and_persistence (test_proyecto.ProjectTests.test_duplicate_code_and_persistence) ... ok
+test_entry_exit_and_stock_guard (test_proyecto.ProjectTests.test_entry_exit_and_stock_guard) ... ok
+test_four_documents_and_missing_file (test_proyecto.ProjectTests.test_four_documents_and_missing_file) ... ok
+test_paths_and_quantities_rejected (test_proyecto.ProjectTests.test_paths_and_quantities_rejected) ... ok
+test_price_precision_and_validation (test_proyecto.ProjectTests.test_price_precision_and_validation) ... ok
+test_timer_continue_and_change_without_ten_minute_wait (test_proyecto.ProjectTests.test_timer_continue_and_change_without_ten_minute_wait) ... Selecciona una opción: 
+Han pasado 10 minutos sin seleccionar una opción.
+Selecciona una opción: 
+Han pasado 10 minutos sin seleccionar una opción.
+Selecciona una opción: ok
+test_csrf_logout_and_restart (test_web.WebTests.test_csrf_logout_and_restart) ... ok
+test_empty_public_catalog_and_denied_edits (test_web.WebTests.test_empty_public_catalog_and_denied_edits) ... ok
+test_migration_preserves_existing_inventory (test_web.WebTests.test_migration_preserves_existing_inventory) ... ok
+test_password_limit_and_wrong_origin (test_web.WebTests.test_password_limit_and_wrong_origin) ... ok
+test_password_rotation_and_https_cookie (test_web.WebTests.test_password_rotation_and_https_cookie) ... ok
+test_retire_permissions_confirmation_and_persistence (test_web.WebTests.test_retire_permissions_confirmation_and_persistence) ... ok
+test_staff_price_movement_and_public_filter (test_web.WebTests.test_staff_price_movement_and_public_filter) ... ok
+
+----------------------------------------------------------------------
+Ran 16 tests in 1.420s
+
+OK
+Tiempo para seleccionar: 0.0 segundos.

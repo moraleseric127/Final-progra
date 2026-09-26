@@ -1,0 +1,6 @@
+app.py: 126/142 líneas físicas con comentarios (88.7%).
+core.py: 131/211 líneas físicas con comentarios (62.1%).
+consola.py: 73/141 líneas físicas con comentarios (51.8%).
+seguridad.py: 69/90 líneas físicas con comentarios (76.7%).
+configurar_acceso.py: 30/35 líneas físicas con comentarios (85.7%).
+Se cuentan comentarios # completos o al final de una línea; el denominador incluye líneas vacías.
